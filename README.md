@@ -134,10 +134,6 @@ harlequin              # the default profile
 harlequin -P sso       # a named one
 ```
 
-The keys above the blank line are Harlequin's own; the rest are this adapter's
-options, spelled the way `--long-option-names` are but with underscores. Keep
-secrets out of a file you commit — name a `connections.toml` entry with
-`connection_name` instead, or point `private_key_file` at a key outside the repo.
 
 ### Authentication
 
