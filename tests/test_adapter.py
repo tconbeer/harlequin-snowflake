@@ -10,9 +10,11 @@ from harlequin.exception import HarlequinConnectionError, HarlequinQueryError
 from harlequin.options import AbstractOption
 from textual_fastdatatable.backend import create_backend
 
+from harlequin_snowflake import adapter as adapter_module
 from harlequin_snowflake.adapter import (
     HarlequinSnowflakeAdapter,
     HarlequinSnowflakeConnection,
+    arrow_fetch_available,
 )
 
 if sys.version_info < (3, 10):
@@ -90,6 +92,18 @@ def test_secrets_are_marked_secret() -> None:
         assert options[name].secret is True, f"{name} should be marked secret"
 
 
+def test_arrow_fetch_is_available() -> None:
+    """The Arrow fetch path must be reachable in a default installation.
+
+    The connector reaches pyarrow through an optional-dependency shim that only
+    resolves when pandas imports; pyarrow alone -- which Harlequin installs on
+    its own -- leaves it inert, and every `fetch_arrow_all` raises
+    MissingDependencyError. That is why this package depends on the connector's
+    `pandas` extra, and this test is what notices if that dependency is dropped.
+    """
+    assert arrow_fetch_available() is True
+
+
 def test_init_ignores_unexpected_kwargs() -> None:
     adapter = HarlequinSnowflakeAdapter(
         conn_str=("snowflake://acct",), foo=1, bar="baz", read_only=True
@@ -143,7 +157,8 @@ def test_connect(connection: HarlequinSnowflakeConnection) -> None:
 def test_execute_select(connection: HarlequinSnowflakeConnection) -> None:
     cur = connection.execute("select 1 as a, 'two' as b, null as c")
     assert isinstance(cur, HarlequinCursor)
-    assert cur.columns() == [("A", "#"), ("B", "s"), ("C", "?")]
+    # Snowflake types an untyped NULL literal as TEXT
+    assert cur.columns() == [("A", "#"), ("B", "s"), ("C", "s")]
     data = cur.fetchall()
     backend = create_backend(data)
     assert backend.column_count == 3
@@ -182,10 +197,16 @@ def test_execute_typed_columns(connection: HarlequinSnowflakeConnection) -> None
 
 
 @pytest.mark.integration
-def test_execute_ddl_returns_none(connection: HarlequinSnowflakeConnection) -> None:
-    """A statement with no result set is not a cursor. `alter session` is the
-    read-only way to check that, since this suite never writes."""
-    assert connection.execute("alter session set query_tag = 'harlequin-test'") is None
+def test_session_statement_returns_a_status_result(
+    connection: HarlequinSnowflakeConnection,
+) -> None:
+    """Snowflake answers a statement that returns no data with a one-row status
+    result rather than with nothing, so Harlequin shows it in the data table.
+    `alter session` is the read-only way to check that, since this suite never
+    writes."""
+    cur = connection.execute("alter session set query_tag = 'harlequin-test'")
+    assert cur is not None
+    assert create_backend(cur.fetchall()).row_count == 1
 
 
 @pytest.mark.integration
@@ -215,6 +236,40 @@ def test_show_statement_falls_back_from_arrow(
     assert cur is not None
     assert cur.columns()
     assert cur.fetchall() is not None
+
+
+@pytest.mark.integration
+def test_rows_fall_back_to_the_same_values_as_arrow(
+    connection: HarlequinSnowflakeConnection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The row path is what a JSON result set uses, and must agree with Arrow."""
+    query = (
+        "select 1 as a, 'two' as b, null as c, 90071992547409.93::number(18, 2) as d"
+    )
+
+    cur = connection.execute(query)
+    assert cur is not None
+    from_arrow = create_backend(cur.fetchall()).get_row_at(0)
+
+    monkeypatch.setattr(adapter_module, "arrow_fetch_available", lambda: False)
+    cur = connection.execute(query)
+    assert cur is not None
+    from_rows = create_backend(cur.fetchall()).get_row_at(0)
+
+    assert [str(value) for value in from_arrow] == [str(value) for value in from_rows]
+
+
+@pytest.mark.integration
+def test_exact_numbers_are_not_rounded_to_floats(
+    connection: HarlequinSnowflakeConnection,
+) -> None:
+    """Snowflake's Arrow default renders NUMBER as float64, which rounds away
+    digits past about 15 significant ones. This adapter turns that off."""
+    cur = connection.execute("select 90071992547409.93::number(18, 2) as d")
+    assert cur is not None
+    [[value]] = (create_backend(cur.fetchall()).get_row_at(0),)
+    assert str(value) == "90071992547409.93"
 
 
 @pytest.mark.integration

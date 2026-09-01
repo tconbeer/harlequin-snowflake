@@ -360,6 +360,19 @@ proxy_password = TextOption(
     secret=True,
 )
 
+arrow_number_to_decimal = SelectOption(
+    name="arrow_number_to_decimal",
+    description=(
+        "Whether NUMBER columns arrive as exact decimals. Snowflake's own "
+        "default is false, which renders them as floats and silently rounds any "
+        "value with more than about 15 significant digits; this adapter "
+        "defaults it to true so that what you see is the value Snowflake "
+        "stores. Set it to false for slightly smaller, faster result sets."
+    ),
+    choices=["true", "false"],
+    default="true",
+)
+
 disable_ocsp_checks = FlagOption(
     name="disable_ocsp_checks",
     description=(
@@ -411,5 +424,6 @@ SNOWFLAKE_OPTIONS = [
     proxy_port,
     proxy_user,
     proxy_password,
+    arrow_number_to_decimal,
     disable_ocsp_checks,
 ]

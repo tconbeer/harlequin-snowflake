@@ -21,3 +21,9 @@ All notable changes to this project will be documented in this file.
   level.
 - Query cancellation, transaction modes, and autocompletion sourced from the
   account's own functions, procedures, and session parameters.
+- Fetches result sets as Arrow tables, matching Harlequin's Arrow-backed data
+  table. Depends on `snowflake-connector-python[pandas]`, since the connector's
+  Arrow support is gated behind that extra; falls back to reading rows for the
+  statements Snowflake answers in JSON.
+- Defaults `arrow_number_to_decimal` to true, unlike the connector, so `NUMBER`
+  columns are not rounded to floats.

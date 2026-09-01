@@ -41,6 +41,7 @@ _BOOL_PARAMS = frozenset(
         "oauth_disable_pkce",
         "oauth_enable_refresh_tokens",
         "oauth_enable_single_use_refresh_tokens",
+        "arrow_number_to_decimal",
     }
 )
 
@@ -269,6 +270,12 @@ def build_connect_kwargs(
         str(kwargs.get("authenticator", "snowflake")).casefold() == "snowflake"
     ):
         kwargs["authenticator"] = "SNOWFLAKE_JWT"
+
+    # Snowflake's Arrow encoding defaults to float64 for NUMBER columns, which
+    # rounds anything past about 15 significant digits: 90071992547409.93 comes
+    # back as 90071992547409.92. A query tool has to show the stored value, so
+    # exact decimals are the default here and the user can opt back out.
+    kwargs.setdefault("arrow_number_to_decimal", True)
 
     connections_file_path = (
         Path(str(connections_file)).expanduser() if connections_file else None

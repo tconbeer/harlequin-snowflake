@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from functools import lru_cache
 from itertools import cycle
 from typing import TYPE_CHECKING, Any, Sequence
 
@@ -17,6 +18,10 @@ from snowflake.connector import DictCursor, SnowflakeConnection
 from snowflake.connector import connect as snowflake_connect
 from snowflake.connector.cursor import SnowflakeCursor
 from snowflake.connector.errors import Error as SnowflakeError
+from snowflake.connector.errors import (
+    MissingDependencyError,
+    NotSupportedError,
+)
 
 from harlequin_snowflake.catalog import (
     ColumnCatalogItem,
@@ -41,6 +46,26 @@ CANCELLED_ERRNOS = frozenset({604, 606})
 same thing for an asynchronous job. A cancel is the user's own doing, so it is
 reported as an empty result rather than as a query error.
 """
+
+
+@lru_cache(maxsize=1)
+def arrow_fetch_available() -> bool:
+    """Whether this installation can hand back an Arrow table directly.
+
+    Harlequin's data table is Arrow-backed, so fetching Arrow from Snowflake
+    skips a conversion through Python objects entirely. The connector reaches
+    Arrow through its own optional-dependency shim, which resolves only when
+    *pandas* imports -- pyarrow alone is not enough, even though Harlequin
+    already installs one. That is why this package depends on the connector's
+    `pandas` extra, so the answer here is normally yes; it is still checked,
+    because a connector built without the Arrow extension answers no, and a
+    result read as rows is correct either way.
+    """
+    try:
+        from snowflake.connector.options import installed_pandas
+    except ImportError:  # pragma: no cover -- a connector that moved the flag
+        return False
+    return bool(installed_pandas)
 
 
 class HarlequinSnowflakeCursor(HarlequinCursor):
@@ -88,37 +113,45 @@ class HarlequinSnowflakeCursor(HarlequinCursor):
                 title="Harlequin encountered an error while executing your query.",
             ) from e
         finally:
-            self.conn._forget(self.cur)
             self.cur.close()
 
     def _fetch_arrow(self) -> AutoBackendType | None:
-        """The result set as an Arrow table, or None if this one is not Arrow.
+        """The result set as an Arrow table, or None if this one cannot be.
 
         Snowflake returns most result sets in Arrow, which carries the column
-        types with it and skips a conversion through Python objects. `SHOW` and
-        `DESCRIBE` statements, `PUT`/`GET`, and an installation without the
-        Arrow extension all come back as JSON instead, which the caller reads
-        the ordinary way.
+        types with it and skips a conversion through Python objects. Three
+        things send a result down the ordinary row path instead: a statement
+        Snowflake answers in JSON (`SHOW`, `DESCRIBE`, `PUT`/`GET`), a
+        connector built without the Arrow extension, and a connector whose
+        Arrow support is not importable -- see `arrow_fetch_available()`.
         """
+        if not arrow_fetch_available():
+            return None
         if getattr(self.cur, "_query_result_format", None) != "arrow":
             return None
         import pyarrow as pa
 
+        batches: list[pa.Table] = []
         try:
             if self._limit is None:
                 return self.cur.fetch_arrow_all(force_return_table=True)
-            batches: list[pa.Table] = []
             rows = 0
             for batch in self.cur.fetch_arrow_batches():
                 batches.append(batch)
                 rows += batch.num_rows
                 if rows >= self._limit:
                     break
-            if not batches:
-                return self.cur.fetch_arrow_all(force_return_table=True)
-            return pa.concat_tables(batches).slice(0, self._limit)
-        except NotImplementedError:
+        except (MissingDependencyError, NotSupportedError, NotImplementedError):
+            if batches:
+                # Rows have already been read off the cursor, so falling back
+                # to the row path would silently drop them.
+                raise
             return None
+        if not batches:
+            # An empty result set yields no batches, and there is nothing left
+            # on the cursor to read a schema from.
+            return []
+        return pa.concat_tables(batches).slice(0, self._limit)
 
 
 class HarlequinSnowflakeConnection(HarlequinConnection):
@@ -140,8 +173,8 @@ class HarlequinSnowflakeConnection(HarlequinConnection):
             ) from e
 
         # every in-flight statement, so that cancel() knows what to abort. A
-        # cursor is added before it is executed and removed when its results are
-        # fetched, so the window it is cancellable in is the window it is running.
+        # cursor goes in before it is executed and comes out when `execute()`
+        # returns, so what is in here is exactly what is running.
         self._in_flight: dict[SnowflakeCursor, str] = {}
         self._in_flight_lock = threading.Lock()
 
@@ -163,7 +196,6 @@ class HarlequinSnowflakeConnection(HarlequinConnection):
         try:
             cur.execute(query)
         except SnowflakeError as e:
-            self._forget(cur)
             cur.close()
             if getattr(e, "errno", None) in CANCELLED_ERRNOS:
                 return None
@@ -172,16 +204,20 @@ class HarlequinSnowflakeConnection(HarlequinConnection):
                 title="Harlequin encountered an error while executing your query.",
             ) from e
         except Exception as e:
-            self._forget(cur)
             cur.close()
             raise HarlequinQueryError(
                 msg=f"{e.__class__.__name__}: {e}",
                 title="Harlequin encountered an error while executing your query.",
             ) from e
+        finally:
+            # `execute()` returns once the statement itself has finished, so
+            # this is the end of the window an abort could act on. Anything
+            # still to come is result chunks downloading, which the abort
+            # request cannot stop anyway.
+            self._forget(cur)
 
         if cur.description:
             return HarlequinSnowflakeCursor(self, cur)
-        self._forget(cur)
         cur.close()
         return None
 

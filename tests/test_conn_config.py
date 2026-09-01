@@ -189,6 +189,24 @@ def test_matching_connection_names_do_not_raise() -> None:
     assert kwargs["connection_name"] == "same"
 
 
+def test_exact_decimals_are_the_default() -> None:
+    """Snowflake's own default renders NUMBER as float64 and rounds it."""
+    kwargs = build_connect_kwargs(conn_str=("snowflake://acct",), options={})
+    assert kwargs["arrow_number_to_decimal"] is True
+
+
+@pytest.mark.parametrize("value,expected", [("false", False), ("true", True)])
+def test_exact_decimals_can_be_turned_off(value: str, expected: bool) -> None:
+    from_option = build_connect_kwargs(
+        conn_str=("snowflake://acct",), options={"arrow_number_to_decimal": value}
+    )
+    from_url = build_connect_kwargs(
+        conn_str=(f"snowflake://acct?arrow_number_to_decimal={value}",), options={}
+    )
+    assert from_option["arrow_number_to_decimal"] is expected
+    assert from_url["arrow_number_to_decimal"] is expected
+
+
 def test_an_identified_account_does_not_fall_back_to_a_default_connection() -> None:
     kwargs = build_connect_kwargs(
         conn_str=(), options={"account": "acct", "user": "me"}

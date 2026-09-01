@@ -10,18 +10,27 @@ Everything the connector can do, this adapter can do: every authenticator,
 
 ## Installation
 
-`harlequin-snowflake` is a Harlequin plug-in. Install it into the same
-environment as Harlequin — the simplest way is with `uv`:
-
-```bash
-uv tool install 'harlequin[snowflake]'
-```
-
-or, into an existing Harlequin installation:
+`harlequin-snowflake` is a Harlequin plug-in, so it has to live in the same
+environment as Harlequin itself. With `uv`:
 
 ```bash
 uv tool install --with harlequin-snowflake harlequin
 ```
+
+Into an existing Harlequin install:
+
+```bash
+uv tool install --upgrade --with harlequin-snowflake harlequin
+```
+
+Or with pip, into whatever environment Harlequin is in:
+
+```bash
+pip install harlequin-snowflake
+```
+
+Harlequin finds the adapter through its `harlequin.adapter` entry point; there
+is nothing else to configure.
 
 ## Usage
 
@@ -166,10 +175,25 @@ too. A role that cannot list them still gets keywords and catalog completions.
 
 ### Results
 
-Result sets are fetched as Arrow tables when Snowflake returns Arrow, which is
-most of the time, so types survive the trip and no conversion through Python
-objects is needed. `SHOW` and `DESCRIBE` results, which Snowflake returns as
-JSON, fall back to rows.
+Result sets are fetched as Arrow tables, which is how Snowflake returns most of
+them and how Harlequin's data table stores them, so types survive the trip and
+nothing is converted through Python objects on the way. Fetching 100k rows takes
+a few seconds rather than tens of them.
+
+This is why `harlequin-snowflake` depends on `snowflake-connector-python[pandas]`
+rather than the bare connector: the connector reaches pyarrow through an
+optional-dependency shim that only resolves when pandas imports, so without that
+extra every Arrow fetch raises `MissingDependencyError` even though Harlequin
+has already installed a perfectly good pyarrow. Statements Snowflake answers in
+JSON instead — `SHOW`, `DESCRIBE`, `PUT`/`GET` — are read as rows, as is any
+installation whose connector was built without the Arrow extension.
+
+One default differs from the connector's: `arrow_number_to_decimal` is on.
+Snowflake's Arrow encoding renders `NUMBER` columns as float64 by default, which
+silently rounds any value with more than about 15 significant digits —
+`90071992547409.93::number(18,2)` comes back as `90071992547409.92`. A query
+tool has to show the stored value, so exact decimals are the default here. Pass
+`--arrow-number-to-decimal false` for slightly smaller, faster result sets.
 
 ## Development
 
@@ -182,14 +206,16 @@ make serve         # run Harlequin against CONNECTION
 
 The unit tests need no database. The integration tests run against a real
 account and are strictly read-only — they introspect what is already there and
-never create, alter, or drop anything. Point them at a `connections.toml` entry:
+never create, alter, or drop anything.
+
+They take their connection from a `snowflake` profile in `.harlequin.toml` in
+the repo root — the same file `make serve` uses — or, failing that, from the
+`connections.toml` entry named by `HARLEQUIN_SNOWFLAKE_TEST_CONNECTION`. With
+neither, they skip.
 
 ```bash
-export HARLEQUIN_SNOWFLAKE_TEST_CONNECTION=my_account
 make integration
 ```
-
-Without that variable, the integration tests skip.
 
 ## License
 

@@ -5,23 +5,21 @@ read-only: they introspect whatever objects the account already has and never
 create, alter, or drop anything. Tests that need a connection are skipped when
 none is configured, so the unit tests still run anywhere.
 
-Configure a connection by adding an entry to `~/.snowflake/connections.toml`
-and naming it in the `HARLEQUIN_SNOWFLAKE_TEST_CONNECTION` environment
-variable, e.g.
+There are two ways to configure one:
 
-    [harlequin_test]
-    account = "myorg-myaccount"
-    user = "..."
-    authenticator = "SNOWFLAKE_JWT"
-    private_key_file = "~/.snowflake/rsa_key.p8"
-    warehouse = "..."
-    role = "..."
+* A Harlequin profile in `.harlequin.toml` in the repo root -- the same file
+  `make serve` uses. The profile named by `HARLEQUIN_SNOWFLAKE_TEST_PROFILE`,
+  or the file's `default_profile`, is used if its adapter is this one.
+* An entry in the connector's own `connections.toml`, named by
+  `HARLEQUIN_SNOWFLAKE_TEST_CONNECTION`.
 """
 
 from __future__ import annotations
 
 import os
-from typing import Generator
+import sys
+from pathlib import Path
+from typing import Any, Generator
 
 import pytest
 
@@ -30,7 +28,12 @@ from harlequin_snowflake.adapter import (
     HarlequinSnowflakeConnection,
 )
 
-TEST_CONNECTION_NAME = os.environ.get("HARLEQUIN_SNOWFLAKE_TEST_CONNECTION", "")
+if sys.version_info < (3, 11):
+    import tomli as tomllib
+else:
+    import tomllib
+
+HARLEQUIN_CONFIG = Path(__file__).parent.parent / ".harlequin.toml"
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -40,26 +43,55 @@ def pytest_configure(config: pytest.Config) -> None:
     )
 
 
+def _profile_options() -> dict[str, Any] | None:
+    """The adapter options in the configured Harlequin profile, if there is one.
+
+    Only keys this adapter declares as options are kept, so that Harlequin's own
+    profile settings -- the theme, the keymap, the row limit -- are not passed
+    to the connector as connection parameters.
+    """
+    if not HARLEQUIN_CONFIG.is_file():
+        return None
+    with HARLEQUIN_CONFIG.open("rb") as f:
+        config = tomllib.load(f)
+    profiles = config.get("profiles") or {}
+    name = os.environ.get("HARLEQUIN_SNOWFLAKE_TEST_PROFILE") or config.get(
+        "default_profile"
+    )
+    profile = profiles.get(name) if name else None
+    if not isinstance(profile, dict) or profile.get("adapter") != "snowflake":
+        return None
+    declared = {
+        option.name for option in HarlequinSnowflakeAdapter.ADAPTER_OPTIONS or []
+    }
+    return {key: value for key, value in profile.items() if key in declared}
+
+
 @pytest.fixture(scope="session")
-def connection_name() -> str:
-    if not TEST_CONNECTION_NAME:
-        pytest.skip(
-            "Set HARLEQUIN_SNOWFLAKE_TEST_CONNECTION to the name of a "
-            "connections.toml entry to run the integration tests."
-        )
-    return TEST_CONNECTION_NAME
+def adapter() -> HarlequinSnowflakeAdapter:
+    options = _profile_options()
+    if options:
+        return HarlequinSnowflakeAdapter(conn_str=(), **options)
+    connection_name = os.environ.get("HARLEQUIN_SNOWFLAKE_TEST_CONNECTION", "")
+    if connection_name:
+        return HarlequinSnowflakeAdapter(conn_str=(connection_name,))
+    pytest.skip(
+        "No Snowflake connection configured. Add a snowflake profile to "
+        ".harlequin.toml, or set HARLEQUIN_SNOWFLAKE_TEST_CONNECTION to the "
+        "name of a connections.toml entry."
+    )
 
 
 @pytest.fixture(scope="session")
 def connection(
-    connection_name: str,
+    adapter: HarlequinSnowflakeAdapter,
 ) -> Generator[HarlequinSnowflakeConnection, None, None]:
     """One session-scoped connection, shared by every integration test.
 
     Session-scoped because authenticating is the slow part, and because an
     interactive authenticator would otherwise prompt once per test.
     """
-    conn = HarlequinSnowflakeAdapter(conn_str=(connection_name,)).connect()
+    conn = adapter.connect()
     yield conn
     conn.close()
 
@@ -75,25 +107,15 @@ def current_database(connection: HarlequinSnowflakeConnection) -> str:
 @pytest.fixture(scope="session")
 def current_schema(connection: HarlequinSnowflakeConnection) -> str:
     schema = connection.execute_scalar("select current_schema()")
-    if not schema:
-        pytest.skip("The test connection has no current schema.")
-    return str(schema)
-
-
-@pytest.fixture(scope="session")
-def a_relation(
-    connection: HarlequinSnowflakeConnection,
-    current_database: str,
-    current_schema: str,
-) -> dict[str, str]:
-    """The first relation in the session's schema, for the tests that need one."""
-    relations = connection._get_relations(current_database, current_schema)
-    if not relations:
-        pytest.skip(
-            f"{current_database}.{current_schema} has no relations to introspect."
-        )
-    return {
-        "database": current_database,
-        "schema": current_schema,
-        "name": str(relations[0]["name"]),
-    }
+    if schema:
+        return str(schema)
+    # A profile may set only a database. Any schema in it will do, since these
+    # tests only read.
+    schemas = [
+        name
+        for name in connection._get_schemas(str(connection.conn.database))
+        if name.upper() != "INFORMATION_SCHEMA"
+    ]
+    if not schemas:
+        pytest.skip("The test connection's database has no readable schema.")
+    return schemas[0]

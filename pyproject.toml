@@ -11,7 +11,16 @@ requires-python = ">=3.10"
 dependencies = [
     # 2.11 is the first version with CatalogSearchResult, which search_catalog returns
     "harlequin>=2.11,<3",
-    "snowflake-connector-python>=3.12,<4",
+    # the `pandas` extra is what makes the connector's Arrow fetch path
+    # reachable: it resolves the optional-dependency shim that `fetch_arrow_all`
+    # goes through, which stays inert on pyarrow alone.
+    "snowflake-connector-python[pandas]>=3.12,<4",
+    # That extra allows pandas>=2.1.2, but wheels for the newer interpreters
+    # start later than that -- 2.2.3 for 3.13, 2.3.3 for 3.14 -- and a floor
+    # below them lets a resolver pick a version it would have to build from
+    # source. These floors keep every supported Python on a wheel.
+    "pandas>=2.2.3,<3; python_version < '3.14'",
+    "pandas>=2.3.3,<3; python_version >= '3.14'",
 ]
 
 [project.entry-points."harlequin.adapter"]
@@ -25,6 +34,7 @@ dev = [
     "mypy>=1.10.0,<2",
     "pre-commit>=3.5.0,<4",
     "pyinstrument>=4.6.1,<5",
+    "tomli>=2.0; python_version < '3.11'",
 ]
 
 [build-system]
@@ -93,5 +103,5 @@ no_implicit_reexport = true
 strict_equality = true
 
 [[tool.mypy.overrides]]
-module = ["snowflake.*", "pyarrow.*"]
+module = ["snowflake.*", "pyarrow.*", "tomli.*"]
 ignore_missing_imports = true
