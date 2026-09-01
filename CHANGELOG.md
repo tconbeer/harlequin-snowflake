@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ## [0.1.0] - 2026-09-01
 
+## [0.1.0] - 2026-09-01
+
 - Initial release. Adds a Snowflake adapter for Harlequin, built on the official
   `snowflake-connector-python` driver.
 - Supports every authenticator the connector supports, including password,
@@ -27,3 +29,6 @@ All notable changes to this project will be documented in this file.
   statements Snowflake answers in JSON.
 - Defaults `arrow_number_to_decimal` to true, unlike the connector, so `NUMBER`
   columns are not rounded to floats.
+
+[unreleased]: https://github.com/tconbeer/harlequin-snowflake/compare/0.1.0...HEAD
+[0.1.0]: https://github.com/tconbeer/harlequin-snowflake/compare/5e2ee0cccc3b26e182268e1aa1a860f298a58fa7...0.1.0
