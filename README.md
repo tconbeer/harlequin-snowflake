@@ -87,14 +87,57 @@ The path is `/database/schema`, and any connector parameter can go in the query
 string.
 
 **Options.** Every connection parameter is also a CLI option, which Harlequin
-will also read from a profile in `~/.config/harlequin/config.toml` or from
-`HARLEQUIN_*` environment variables:
+will also read from `HARLEQUIN_*` environment variables:
 
 ```bash
 harlequin -a snowflake --account myorg-myaccount --user me --warehouse COMPUTE_WH
 ```
 
 Run `harlequin --help` for the full list.
+
+**A Harlequin profile.** Anything you would pass on the command line can live in
+a profile instead, in `~/.config/harlequin/config.toml` or in a `.harlequin.toml`
+beside the project you are working in. With a `default_profile`, `harlequin` on
+its own is the whole command:
+
+```toml
+default_profile = "dev"
+
+[profiles.dev]
+adapter = "snowflake"
+theme = "harlequin"
+keymap_name = ["vscode"]
+viewer_max_rows = 100_000
+
+account = "myorg-myaccount"
+user = "me@example.com"
+role = "ANALYST"
+warehouse = "COMPUTE_WH"
+database = "ANALYTICS"
+schema = "PUBLIC"
+
+# key-pair auth; --private-key-file selects it on its own
+private_key_file = "~/.snowflake/rsa_key.p8"
+private_key_file_pwd = "..."
+
+[profiles.sso]
+adapter = "snowflake"
+account = "myorg-myaccount"
+user = "me@example.com"
+authenticator = "externalbrowser"
+client_store_temporary_credential = true
+warehouse = "COMPUTE_WH"
+```
+
+```bash
+harlequin              # the default profile
+harlequin -P sso       # a named one
+```
+
+The keys above the blank line are Harlequin's own; the rest are this adapter's
+options, spelled the way `--long-option-names` are but with underscores. Keep
+secrets out of a file you commit — name a `connections.toml` entry with
+`connection_name` instead, or point `private_key_file` at a key outside the repo.
 
 ### Authentication
 
@@ -105,7 +148,7 @@ connector's values:
 | --- | --- |
 | `snowflake` (default) | `--user` and `--password` |
 | `externalbrowser` | `--user`; opens a browser for SSO. Add `--client-store-temporary-credential` so it does not open one every time. |
-| `snowflake_jwt` | `--user` and `--private-key-file` (plus `--private-key-file-pwd` if the key is encrypted). Passing `--private-key-file` selects this authenticator on its own. |
+| `snowflake_jwt` (key pair) | `--user` and `--private-key-file` (plus `--private-key-file-pwd` if the key is encrypted). Passing `--private-key-file` selects this authenticator on its own. |
 | `oauth` | `--token`, or `--token-file-path` |
 | `oauth_authorization_code` | `--oauth-client-id`, `--oauth-client-secret`, and optionally the URL options |
 | `oauth_client_credentials` | `--oauth-client-id`, `--oauth-client-secret`, `--oauth-token-request-url` |
@@ -124,26 +167,7 @@ Snowflake has no server-enforced read-only session or transaction, so this
 adapter does not offer `--read-only`: it would be a promise it could not keep.
 Connect with a role that has only the privileges you want instead.
 
-## What the adapter does
-
-### Data catalog
-
-The catalog lazy-loads a level at a time, so connecting to an account with
-thousands of objects is fast: databases first, then a database's schemas when
-you expand it, then a schema's relations, then a relation's columns. Tables,
-views, materialized views, dynamic tables, Iceberg tables, external tables,
-event tables, and hybrid tables are each shown with their own type label and
-context menu.
-
-### Catalog search
-
-`IMPLEMENTS_CATALOG_SEARCH` is on: searching finds databases, schemas,
-relations, and columns across the whole account without walking the tree, using
-`SHOW ... LIKE ... IN ACCOUNT`. Because `SHOW` has no `ESCAPE` clause, a `%` or
-`_` you type is sent as a single-character wildcard and the exact matches are
-kept — so a term with an underscore in it still means the underscore.
-
-### Interactions
+## Interactions
 
 Right-click (or press `.`) on a catalog item:
 
@@ -154,54 +178,13 @@ Right-click (or press `.`) on a catalog item:
   Definition, Show Refresh History (dynamic tables), and the matching Drop
 - **Column** — Show Value Counts
 
-### Cancel
-
-`IMPLEMENTS_CANCEL` is on. Pressing `ctrl+c` aborts the running statement by the
-request ID the connector assigned it — the same mechanism the connector's own
-query timeout uses, which means it works while the query is still in flight
-rather than only after it returns.
-
-### Transactions
-
-Toggle between `Auto` (autocommit) and `Manual`. In `Manual`, Harlequin shows
-commit and rollback buttons.
-
-### Autocompletion
-
-Snowflake's keywords ship with the adapter; functions, procedures, and session
-parameters are read from the account itself with `SHOW FUNCTIONS`,
-`SHOW PROCEDURES`, and `SHOW PARAMETERS`, so account-defined UDFs are completed
-too. A role that cannot list them still gets keywords and catalog completions.
-
-### Results
-
-Result sets are fetched as Arrow tables, which is how Snowflake returns most of
-them and how Harlequin's data table stores them, so types survive the trip and
-nothing is converted through Python objects on the way. Fetching 100k rows takes
-a few seconds rather than tens of them.
-
-This is why `harlequin-snowflake` depends on `snowflake-connector-python[pandas]`
-rather than the bare connector: the connector reaches pyarrow through an
-optional-dependency shim that only resolves when pandas imports, so without that
-extra every Arrow fetch raises `MissingDependencyError` even though Harlequin
-has already installed a perfectly good pyarrow. Statements Snowflake answers in
-JSON instead — `SHOW`, `DESCRIBE`, `PUT`/`GET` — are read as rows, as is any
-installation whose connector was built without the Arrow extension.
-
-One default differs from the connector's: `arrow_number_to_decimal` is on.
-Snowflake's Arrow encoding renders `NUMBER` columns as float64 by default, which
-silently rounds any value with more than about 15 significant digits —
-`90071992547409.93::number(18,2)` comes back as `90071992547409.92`. A query
-tool has to show the stored value, so exact decimals are the default here. Pass
-`--arrow-number-to-decimal false` for slightly smaller, faster result sets.
-
 ## Development
 
 ```bash
 make init          # uv sync
 make check         # format, lint, type check, test
 make test          # unit tests only
-make serve         # run Harlequin against CONNECTION
+make serve         # run Harlequin on the default profile
 ```
 
 The unit tests need no database. The integration tests run against a real
