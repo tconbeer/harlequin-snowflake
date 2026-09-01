@@ -105,3 +105,12 @@ strict_equality = true
 [[tool.mypy.overrides]]
 module = ["snowflake.*", "pyarrow.*", "tomli.*"]
 ignore_missing_imports = true
+
+# numpy arrives in the graph through the Snowflake connector; nothing here
+# touches it directly. Its stubs use PEP 695 `type` statements, which mypy
+# refuses to parse under `python_version = "3.10"`, so skip following them
+# rather than give up checking against the floor this package supports.
+[[tool.mypy.overrides]]
+module = ["numpy", "numpy.*"]
+follow_imports = "skip"
+follow_imports_for_stubs = true
