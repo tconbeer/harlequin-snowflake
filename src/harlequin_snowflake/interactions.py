@@ -274,13 +274,16 @@ def show_refresh_history(
             severity="error",
         )
         return
+    history_function = (
+        f"{item.parent.parent.qualified_identifier}"
+        ".information_schema.dynamic_table_refresh_history"
+    )
     driver.insert_text_in_new_buffer(
         dedent(
             f"""
             select *
             from table(
-                {item.parent.parent.qualified_identifier}
-                .information_schema.dynamic_table_refresh_history(
+                {history_function}(
                     name_prefix => {sql_string(item.qualified_identifier)}
                 )
             )
