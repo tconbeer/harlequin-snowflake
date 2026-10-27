@@ -33,7 +33,13 @@ from harlequin_snowflake.catalog import (
 from harlequin_snowflake.cli_options import SNOWFLAKE_OPTIONS
 from harlequin_snowflake.completions import get_completions
 from harlequin_snowflake.conn_config import build_connect_kwargs, parse_conn_str
-from harlequin_snowflake.sql import contains, like_pattern, quote_identifier, sql_string
+from harlequin_snowflake.sql import (
+    contains,
+    like_pattern,
+    quote_identifier,
+    quote_qualified,
+    sql_string,
+)
 from harlequin_snowflake.types import column_labels, short_type_from_type_code
 
 if TYPE_CHECKING:
@@ -252,23 +258,26 @@ class HarlequinSnowflakeConnection(HarlequinConnection):
         with self._in_flight_lock:
             self._in_flight.pop(cur, None)
 
-    def _query(self, sql: str) -> list[dict[str, Any]]:
+    def _query(
+        self,
+        sql: str,
+        params: Sequence[Any] | None = None,
+        error_title: str = "Snowflake raised an error while reading the catalog:",
+    ) -> list[dict[str, Any]]:
         """One metadata query, as a list of rows keyed by lower-cased column name.
 
-        Every catalog read goes through here, on its own cursor, so that it can
-        run while the editor's own query is still running. Snowflake names the
-        columns of a `SHOW` result in lower case already, but a `select` names
-        them however it was written, so they are folded here.
+        Every catalog read and interaction goes through here, on its own cursor,
+        so that it can run while the editor's own query is still running, and
+        params bind to the statement's `?` markers on the server. Snowflake
+        names the columns of a `SHOW` result in lower case already, but a
+        `select` names them however it was written, so they are folded here.
         """
         try:
             with self.conn.cursor(DictCursor) as cur:
-                cur.execute(sql)
+                cur.execute(sql, params)
                 rows = cur.fetchall()
         except SnowflakeError as e:
-            raise HarlequinQueryError(
-                msg=f"{e.msg or e}",
-                title="Snowflake raised an error while reading the catalog:",
-            ) from e
+            raise HarlequinQueryError(msg=f"{e.msg or e}", title=error_title) from e
         return [
             {str(key).lower(): value for key, value in row.items()}
             for row in rows
@@ -303,8 +312,7 @@ class HarlequinSnowflakeConnection(HarlequinConnection):
         an ordinary one, which `information_schema.tables` does not.
         """
         rows = self._query(
-            "show objects in schema "
-            f"{quote_identifier(database)}.{quote_identifier(schema)}"
+            f"show objects in schema {quote_qualified(database, schema)}"
         )
         return sorted(rows, key=lambda row: str(row.get("name") or ""))
 
@@ -319,9 +327,7 @@ class HarlequinSnowflakeConnection(HarlequinConnection):
         turns into the two labels the catalog wants.
         """
         rows = self._query(
-            "show columns in "
-            f"{quote_identifier(database)}.{quote_identifier(schema)}"
-            f".{quote_identifier(relation)}"
+            f"show columns in {quote_qualified(database, schema, relation)}"
         )
         columns: list[tuple[str, str, str]] = []
         for row in rows:

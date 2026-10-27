@@ -1,12 +1,16 @@
 """Building SQL text safely, for the statements this adapter writes itself.
 
-Catalog reads and context-menu interactions have to name objects the user
-picked, and Snowflake's `SHOW`, `DESCRIBE`, and `GET_DDL` take those names as
-identifiers or string literals rather than as bind parameters, so this is where
-they are quoted.
+Values that a statement can bind are bound instead (see
+`HarlequinSnowflakeConnection._query`). This module is for what cannot be: the
+identifiers and patterns `SHOW` takes, and the SQL inserted into the editor.
 """
 
 from __future__ import annotations
+
+import re
+
+_UNQUOTED_IDENTIFIER = re.compile(r"[A-Z_][A-Z0-9_$]*")
+"""A name Snowflake stores as typed when it is written unquoted."""
 
 
 def quote_identifier(identifier: str) -> str:
@@ -20,21 +24,47 @@ def quote_identifier(identifier: str) -> str:
     return f'"{escaped}"'
 
 
+def quote_qualified(*names: str) -> str:
+    """A dotted name, each part quoted, as in `"db"."schema"."table"`."""
+    return ".".join(quote_identifier(name) for name in names)
+
+
+def editor_identifier(name: str, reserved: frozenset[str] = frozenset()) -> str:
+    """A name as a user would type it: lower case unquoted when that resolves.
+
+    An unquoted name folds to upper case, so only a stored name that is already
+    upper case, and not a reserved word, survives being written without quotes.
+    """
+    if _UNQUOTED_IDENTIFIER.fullmatch(name) and name not in reserved:
+        return name.lower()
+    return quote_identifier(name)
+
+
 def sql_string(value: str) -> str:
-    """One string literal, escaped. Snowflake honors backslash escapes."""
+    """One string literal. Snowflake reads a backslash in one as an escape."""
     escaped = value.replace("\\", "\\\\").replace("'", "''")
     return f"'{escaped}'"
+
+
+def sql_comment(text: str) -> str:
+    """A `--` comment holding text on one line, so no part of it runs as SQL.
+
+    The editor splits lines the way `str.splitlines()` does, which breaks on
+    more than `\\n`, so every one of those breaks becomes a space.
+    """
+    return "-- " + " ".join(text.splitlines())
 
 
 def like_pattern(term: str) -> str:
     """A `SHOW ... LIKE` pattern matching at least every label containing term.
 
     `SHOW` has no `ESCAPE` clause, so a `%` or `_` the user typed cannot be made
-    literal. Each one becomes `_`, which matches the character itself along with
-    every other single character: the server returns a superset, and
-    `contains()` narrows it to the exact matches.
+    literal, and a backslash would escape whatever follows it. Each one becomes
+    `_`, which matches the character itself along with every other single
+    character: the server returns a superset, and `contains()` narrows it to
+    the exact matches.
     """
-    body = "".join("_" if character in "%_" else character for character in term)
+    body = "".join("_" if character in "%_\\" else character for character in term)
     return f"%{body}%"
 
 

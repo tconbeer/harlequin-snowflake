@@ -7,34 +7,44 @@ from typing import TYPE_CHECKING, Any
 from harlequin import HarlequinCompletion
 from harlequin.exception import HarlequinQueryError
 
+from harlequin_snowflake.sql import editor_identifier
+
 if TYPE_CHECKING:
     from harlequin_snowflake.adapter import HarlequinSnowflakeConnection
 
 _KEYWORD_PATH = Path(__file__).parent / "keywords.tsv"
 
 
-def _keyword_completions() -> list[HarlequinCompletion]:
-    """The dialect's keywords, from the list bundled with this adapter.
+def _keywords() -> list[tuple[str, str]]:
+    """The dialect's keywords and their kinds, from the list bundled here.
 
     Snowflake has no queryable table of keywords the way it has one of
     functions, so the list is shipped as a file, sourced from
     https://docs.snowflake.com/en/sql-reference/reserved-keywords.
     """
-    completions: list[HarlequinCompletion] = []
     with _KEYWORD_PATH.open("r") as f:
         reader = csv.reader(f, delimiter="\t")
         _header = next(reader)
-        for keyword, kind in reader:
-            completions.append(
-                HarlequinCompletion(
-                    label=keyword.lower(),
-                    type_label="kw",
-                    value=keyword.lower(),
-                    priority=100 if kind == "reserved" else 1000,
-                    context=None,
-                )
-            )
-    return completions
+        return [(keyword, kind) for keyword, kind in reader]
+
+
+def _reserved_keywords() -> frozenset[str]:
+    return frozenset(
+        keyword.upper() for keyword, kind in _keywords() if kind == "reserved"
+    )
+
+
+def _keyword_completions() -> list[HarlequinCompletion]:
+    return [
+        HarlequinCompletion(
+            label=keyword.lower(),
+            type_label="kw",
+            value=keyword.lower(),
+            priority=100 if kind == "reserved" else 1000,
+            context=None,
+        )
+        for keyword, kind in _keywords()
+    ]
 
 
 def _routine_completions(
@@ -47,6 +57,7 @@ def _routine_completions(
     user-defined routine is namespaced under its schema, which is what makes it
     a member completion after the user types that schema's name.
     """
+    reserved_keywords = _reserved_keywords()
     completions: list[HarlequinCompletion] = []
     for statement, default_label in (
         ("show functions", "fn"),
@@ -62,13 +73,20 @@ def _routine_completions(
             label = row.get("name")
             if not label or not isinstance(label, str) or len(label) > 40:
                 continue
+            schema = _routine_context(row)
             completions.append(
                 HarlequinCompletion(
                     label=label.lower(),
                     type_label=_routine_type_label(row, default_label),
-                    value=label.lower(),
+                    # a built-in is called by its keyword-like name; a routine
+                    # the account defined is an identifier in its stored case
+                    value=(
+                        label.lower()
+                        if schema is None
+                        else editor_identifier(label, reserved_keywords)
+                    ),
                     priority=1000,
-                    context=_routine_context(row),
+                    context=schema,
                 )
             )
     return completions
