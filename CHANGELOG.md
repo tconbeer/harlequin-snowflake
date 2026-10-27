@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- Catalog actions, catalog search, and completions now work on objects whose names contain quotes, backslashes, or other special characters, and on functions with case-sensitive names ([tconbeer/harlequin#1209](https://github.com/tconbeer/harlequin/issues/1209)).
+
 ## [0.1.0] - 2026-09-01
 
 ## [0.1.0] - 2026-09-01
