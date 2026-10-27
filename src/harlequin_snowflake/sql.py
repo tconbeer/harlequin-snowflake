@@ -1,8 +1,8 @@
 """Building SQL text safely, for the statements this adapter writes itself.
 
-Values that a statement can bind are bound instead (see
-`HarlequinSnowflakeConnection._query`). This module is for what cannot be: the
-identifiers and patterns `SHOW` takes, and the SQL inserted into the editor.
+Catalog reads, context-menu interactions, and completions have to name objects
+the user picked, as identifiers or string literals, so this is where they are
+quoted.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ def quote_qualified(*names: str) -> str:
     return ".".join(quote_identifier(name) for name in names)
 
 
-def editor_identifier(name: str, reserved: frozenset[str] = frozenset()) -> str:
+def editor_identifier(name: str, reserved: frozenset[str]) -> str:
     """A name as a user would type it: lower case unquoted when that resolves.
 
     An unquoted name folds to upper case, so only a stored name that is already
@@ -58,11 +58,11 @@ def sql_comment(text: str) -> str:
 def like_pattern(term: str) -> str:
     """A `SHOW ... LIKE` pattern matching at least every label containing term.
 
-    `SHOW` has no `ESCAPE` clause, so a `%` or `_` the user typed cannot be made
-    literal, and a backslash would escape whatever follows it. Each one becomes
-    `_`, which matches the character itself along with every other single
-    character: the server returns a superset, and `contains()` narrows it to
-    the exact matches.
+    `SHOW` has no `ESCAPE` clause, and a backslash would escape whatever
+    follows it, so each `%`, `_`, or `\\` the user typed becomes `_`, which
+    matches the character itself along with every other single character: the
+    server returns a superset, and `contains()` narrows it to the exact
+    matches.
     """
     body = "".join("_" if character in "%_\\" else character for character in term)
     return f"%{body}%"

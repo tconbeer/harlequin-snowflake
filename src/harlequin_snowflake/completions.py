@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -15,7 +16,8 @@ if TYPE_CHECKING:
 _KEYWORD_PATH = Path(__file__).parent / "keywords.tsv"
 
 
-def _keywords() -> list[tuple[str, str]]:
+@lru_cache(maxsize=1)
+def _keywords() -> tuple[tuple[str, str], ...]:
     """The dialect's keywords and their kinds, from the list bundled here.
 
     Snowflake has no queryable table of keywords the way it has one of
@@ -25,7 +27,7 @@ def _keywords() -> list[tuple[str, str]]:
     with _KEYWORD_PATH.open("r") as f:
         reader = csv.reader(f, delimiter="\t")
         _header = next(reader)
-        return [(keyword, kind) for keyword, kind in reader]
+        return tuple((keyword, kind) for keyword, kind in reader)
 
 
 def _reserved_keywords() -> frozenset[str]:

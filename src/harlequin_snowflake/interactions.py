@@ -29,8 +29,7 @@ def _use(
         return
     try:
         item.connection._query(
-            f"use {scope} identifier(?)",
-            [item.qualified_identifier],
+            f"use {scope} {item.qualified_identifier}",
             error_title=f"Snowflake could not switch to {item.label}:",
         )
     except HarlequinQueryError:
@@ -65,8 +64,7 @@ def _drop(
         suffix = " cascade" if cascade else ""
         try:
             connection._query(
-                f"drop {object_type} identifier(?){suffix}",
-                [item.qualified_identifier],
+                f"drop {object_type} {item.qualified_identifier}{suffix}",
                 error_title=f"Snowflake could not drop {item.label}:",
             )
         except HarlequinQueryError:
@@ -192,8 +190,8 @@ def _insert_ddl(
         return
     try:
         rows = connection._query(
-            "select get_ddl(?, ?, true)",
-            [object_type, item.qualified_identifier],
+            f"select get_ddl({sql_string(object_type)}, "
+            f"{sql_string(item.qualified_identifier)}, true)",
             error_title=f"Snowflake could not get the DDL for {item.label}:",
         )
     except HarlequinQueryError:

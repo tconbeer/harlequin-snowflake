@@ -11,7 +11,7 @@ from typing import Any, Callable, Sequence
 import pytest
 from fakes import FakeDriver, fake_connection
 from harlequin.catalog import CatalogItem
-from snowflake_text import qualified_after, read_qualified, string_after
+from snowflake_text import qualified_after, read_qualified, read_string, string_after
 
 from harlequin_snowflake import interactions
 from harlequin_snowflake.catalog import (
@@ -71,14 +71,16 @@ class Objects:
 
 @pytest.mark.parametrize("name", NAMES)
 @pytest.mark.parametrize("scope,depth", [("database", 1), ("schema", 2)])
-def test_use_binds_the_name(name: str, scope: str, depth: int) -> None:
+def test_use_names_the_object(name: str, scope: str, depth: int) -> None:
     objects = Objects(name)
     item = objects.database if scope == "database" else objects.schema
     action = getattr(interactions, f"execute_use_{scope}_statement")
     action(item, objects.driver.as_driver())
     [(sql, params)] = objects.server.calls
-    assert sql == f"use {scope} identifier(?)"
-    assert params is not None and read_qualified(params[0])[0] == objects.path(depth)
+    assert params is None
+    prefix = f"use {scope} "
+    assert sql.startswith(prefix)
+    assert read_qualified(sql, len(prefix)) == (objects.path(depth), len(sql))
 
 
 @pytest.mark.parametrize("name", NAMES)
@@ -105,7 +107,7 @@ def test_use_binds_the_name(name: str, scope: str, depth: int) -> None:
         ),
     ],
 )
-def test_drop_binds_the_name(
+def test_drop_names_the_object(
     name: str, action: str, kind: str | None, object_type: str, suffix: str
 ) -> None:
     objects = Objects(name, kind=kind or "TABLE")
@@ -115,8 +117,12 @@ def test_drop_binds_the_name(
     }.get(object_type, (objects.relation, 3))
     getattr(interactions, action)(item, objects.driver.as_driver())
     [(sql, params)] = objects.server.calls
-    assert sql == f"drop {object_type} identifier(?){suffix}"
-    assert params is not None and read_qualified(params[0])[0] == objects.path(depth)
+    assert params is None
+    prefix = f"drop {object_type} "
+    assert sql.startswith(prefix) and sql.endswith(suffix)
+    path, end = read_qualified(sql, len(prefix))
+    assert path == objects.path(depth)
+    assert sql[end:] == suffix
     assert objects.driver.refreshed
 
 
@@ -130,7 +136,7 @@ def test_drop_binds_the_name(
         ("show_view_definition", "view", 3),
     ],
 )
-def test_show_ddl_binds_the_name(
+def test_show_ddl_names_the_object(
     name: str, action: str, object_type: str, depth: int
 ) -> None:
     ddl = "create table x (\n    a int\n);"
@@ -138,9 +144,13 @@ def test_show_ddl_binds_the_name(
     item = [objects.database, objects.schema, objects.relation][depth - 1]
     getattr(interactions, action)(item, objects.driver.as_driver())
     [(sql, params)] = objects.server.calls
-    assert sql == "select get_ddl(?, ?, true)"
-    assert params is not None and params[0] == object_type
-    assert read_qualified(params[1])[0] == objects.path(depth)
+    assert params is None
+    object_type_literal, end = read_string(sql, len("select get_ddl("))
+    assert object_type_literal == object_type
+    assert sql[end : end + 2] == ", "
+    name_literal, end = read_string(sql, end + 2)
+    assert read_qualified(name_literal) == (objects.path(depth), len(name_literal))
+    assert sql[end:] == ", true)"
     [buffer] = objects.driver.buffers
     header, *body = buffer.splitlines()
     assert header.startswith("-- ")
