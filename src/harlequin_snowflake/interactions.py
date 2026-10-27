@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Sequence
 from harlequin.catalog import CatalogItem
 from harlequin.exception import HarlequinQueryError
 
-from harlequin_snowflake.sql import quote_identifier, sql_string
+from harlequin_snowflake.sql import quote_identifier, sql_comment, sql_string
 
 if TYPE_CHECKING:
     from harlequin.driver import HarlequinDriver
@@ -28,7 +28,10 @@ def _use(
     if item.connection is None:
         return
     try:
-        item.connection.execute(f"use {scope} {item.qualified_identifier}")
+        item.connection._query(
+            f"use {scope} {item.qualified_identifier}",
+            error_title=f"Snowflake could not switch to {item.label}:",
+        )
     except HarlequinQueryError:
         driver.notify(f"Could not switch to {item.label}", severity="error")
         raise
@@ -60,8 +63,9 @@ def _drop(
             return
         suffix = " cascade" if cascade else ""
         try:
-            connection.execute(
-                f"drop {object_type} {item.qualified_identifier}{suffix}"
+            connection._query(
+                f"drop {object_type} {item.qualified_identifier}{suffix}",
+                error_title=f"Snowflake could not drop {item.label}:",
             )
         except HarlequinQueryError:
             driver.notify(
@@ -184,26 +188,22 @@ def _insert_ddl(
     """
     if connection is None:
         return
-    query = (
-        f"select get_ddl({sql_string(object_type)}, "
-        f"{sql_string(item.qualified_identifier)}, true)"
-    )
     try:
-        cur = connection.execute(query)
+        rows = connection._query(
+            f"select get_ddl({sql_string(object_type)}, "
+            f"{sql_string(item.qualified_identifier)}, true)",
+            error_title=f"Snowflake could not get the DDL for {item.label}:",
+        )
     except HarlequinQueryError:
         driver.notify(f"Could not get the DDL for {item.label}", severity="error")
         raise
-    if cur is None:
-        return
-    result = cur.fetchall()
-    if result is None:
-        return
-    try:
-        ddl = list(result)[0][0]
-    except (IndexError, KeyError, TypeError):
+    ddl = next(iter(rows[0].values()), None) if rows else None
+    if ddl is None:
         driver.notify(f"Snowflake returned no DDL for {item.label}", severity="warning")
         return
-    driver.insert_text_in_new_buffer(f"-- DDL for {item.query_name}\n{ddl}")
+    driver.insert_text_in_new_buffer(
+        f"{sql_comment(f'DDL for {item.query_name}')}\n{ddl}"
+    )
 
 
 def show_database_ddl(item: "DatabaseCatalogItem", driver: "HarlequinDriver") -> None:
@@ -272,13 +272,16 @@ def show_refresh_history(
             severity="error",
         )
         return
+    history_function = (
+        f"{item.parent.parent.qualified_identifier}"
+        ".information_schema.dynamic_table_refresh_history"
+    )
     driver.insert_text_in_new_buffer(
         dedent(
             f"""
             select *
             from table(
-                {item.parent.parent.qualified_identifier}
-                .information_schema.dynamic_table_refresh_history(
+                {history_function}(
                     name_prefix => {sql_string(item.qualified_identifier)}
                 )
             )

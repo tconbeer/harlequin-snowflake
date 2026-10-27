@@ -1,15 +1,24 @@
 from __future__ import annotations
 
-import pytest
-from harlequin.catalog import CatalogSearchResult, InteractiveCatalogItem
+from typing import TYPE_CHECKING, Any, Callable
 
+import pytest
+from fakes import FakeDriver
+from harlequin.catalog import CatalogSearchResult, InteractiveCatalogItem
+from harlequin.exception import HarlequinQueryError
+
+from harlequin_snowflake import interactions
 from harlequin_snowflake.adapter import HarlequinSnowflakeConnection
 from harlequin_snowflake.catalog import (
     ColumnCatalogItem,
     DatabaseCatalogItem,
     RelationCatalogItem,
     SchemaCatalogItem,
+    TableCatalogItem,
 )
+
+if TYPE_CHECKING:
+    from harlequin.driver import HarlequinDriver
 
 pytestmark = pytest.mark.integration
 
@@ -185,3 +194,74 @@ def test_search_does_not_treat_underscores_as_wildcards(
     results = connection.search_catalog("zzz_qq", kind="relations")
     for result in results:
         assert "zzz_qq" in result.item.label.casefold()
+
+
+# The statements the context-menu interactions send. Each one either reads, or
+# switches the session back to the context it started in, or targets an object
+# that does not exist, so the suite stays read-only.
+
+
+def test_use_switches_the_session_context(
+    connection: HarlequinSnowflakeConnection,
+    database_item: DatabaseCatalogItem,
+    schema_item: SchemaCatalogItem,
+) -> None:
+    driver = FakeDriver()
+    interactions.execute_use_database_statement(database_item, driver.as_driver())
+    assert connection.execute_scalar("select current_database()") == (
+        database_item.label
+    )
+    interactions.execute_use_schema_statement(schema_item, driver.as_driver())
+    assert connection.execute_scalar("select current_schema()") == schema_item.label
+    assert all(severity != "error" for _, severity in driver.notifications)
+
+
+def test_show_ddl_inserts_the_definition(schema_item: SchemaCatalogItem) -> None:
+    relations = schema_item.fetch_children()
+    if not relations:
+        pytest.skip(f"{schema_item.qualified_identifier} has no relations.")
+    relation = relations[0]
+    [show_ddl] = [
+        callback
+        for label, callback in relation.INTERACTIONS
+        if label in ("Show DDL", "Show View Definition")
+    ]
+    driver = FakeDriver()
+    show_ddl(relation, driver.as_driver())
+    [buffer] = driver.buffers
+    header, *body = buffer.splitlines()
+    assert header.startswith("-- DDL for ")
+    assert "create" in "\n".join(body).casefold()
+
+
+MISSING_NAME = 'harlequin "no such" object\'s \\ ;'
+
+
+@pytest.mark.parametrize(
+    "action,level",
+    [
+        (interactions.execute_drop_table_statement, "relation"),
+        (interactions.execute_drop_view_statement, "relation"),
+        (interactions.execute_drop_schema_statement, "schema"),
+        (interactions.execute_drop_database_statement, "database"),
+    ],
+)
+def test_drop_of_a_missing_object_reaches_the_object_lookup(
+    connection: HarlequinSnowflakeConnection,
+    database_item: DatabaseCatalogItem,
+    schema_item: SchemaCatalogItem,
+    action: Callable[[Any, HarlequinDriver], None],
+    level: str,
+) -> None:
+    """A statement that parsed fails on the name, not on the syntax."""
+    if level == "database":
+        item: Any = DatabaseCatalogItem.from_label(MISSING_NAME, connection)
+    elif level == "schema":
+        item = SchemaCatalogItem.from_parent(database_item, MISSING_NAME)
+    else:
+        item = TableCatalogItem.from_parent(schema_item, MISSING_NAME)
+    driver = FakeDriver()
+    with pytest.raises(HarlequinQueryError) as error:
+        action(item, driver.as_driver())
+    assert "does not exist" in str(error.value.msg)
+    assert not driver.refreshed

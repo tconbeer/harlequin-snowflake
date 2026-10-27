@@ -4,7 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-09-01
+### Bug Fixes
+
+- Catalog search now finds names containing a backslash, and completions for user-defined functions with case-sensitive or reserved names insert a name that resolves ([tconbeer/harlequin#1209](https://github.com/tconbeer/harlequin/issues/1209)).
 
 ## [0.1.0] - 2026-09-01
 

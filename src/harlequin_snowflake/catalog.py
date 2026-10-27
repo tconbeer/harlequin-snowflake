@@ -30,7 +30,7 @@ from harlequin_snowflake.interactions import (
     show_table_ddl,
     show_view_definition,
 )
-from harlequin_snowflake.sql import quote_identifier
+from harlequin_snowflake.sql import quote_identifier, quote_qualified
 
 if TYPE_CHECKING:
     from harlequin_snowflake.adapter import HarlequinSnowflakeConnection
@@ -93,7 +93,7 @@ class RelationCatalogItem(InteractiveCatalogItem["HarlequinSnowflakeConnection"]
             qualified_identifier=(
                 f"{parent.qualified_identifier}.{quote_identifier(label)}"
             ),
-            query_name=(f"{quote_identifier(parent.label)}.{quote_identifier(label)}"),
+            query_name=quote_qualified(parent.label, label),
             label=label,
             type_label=cls.TYPE_LABEL,
             type_name=type_name or cls.DEFAULT_TYPE_NAME,
