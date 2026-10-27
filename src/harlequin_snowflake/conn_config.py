@@ -277,11 +277,6 @@ def build_connect_kwargs(
     # exact decimals are the default here and the user can opt back out.
     kwargs.setdefault("arrow_number_to_decimal", True)
 
-    # A parameter the adapter binds goes to Snowflake as a `?` bind on the
-    # server, rather than being interpolated by the connector on the client. A
-    # query the user runs binds nothing, so this never changes what one sends.
-    kwargs["paramstyle"] = "qmark"
-
     connections_file_path = (
         Path(str(connections_file)).expanduser() if connections_file else None
     )

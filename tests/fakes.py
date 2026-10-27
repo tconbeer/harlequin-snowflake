@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Sequence, cast
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 from harlequin_snowflake.adapter import HarlequinSnowflakeConnection
 
 if TYPE_CHECKING:
     from harlequin.driver import HarlequinDriver
 
-Responder = Callable[[str, "Sequence[Any] | None"], "list[dict[str, Any]]"]
+Responder = Callable[[str], "list[dict[str, Any]]"]
 
 
 class FakeCursor:
@@ -23,9 +23,9 @@ class FakeCursor:
     def __exit__(self, *_: Any) -> None:
         return None
 
-    def execute(self, sql: str, params: Sequence[Any] | None = None) -> FakeCursor:
-        self.server.calls.append((sql, None if params is None else list(params)))
-        self.rows = self.server.respond(sql, params)
+    def execute(self, sql: str) -> FakeCursor:
+        self.server.calls.append(sql)
+        self.rows = self.server.respond(sql)
         return self
 
     def fetchall(self) -> list[dict[str, Any]]:
@@ -36,8 +36,8 @@ class FakeSnowflake:
     """A `SnowflakeConnection` that records what it is sent."""
 
     def __init__(self, respond: Responder | None = None) -> None:
-        self.calls: list[tuple[str, list[Any] | None]] = []
-        self.respond: Responder = respond or (lambda sql, params: [])
+        self.calls: list[str] = []
+        self.respond: Responder = respond or (lambda sql: [])
 
     def cursor(self, *_: Any) -> FakeCursor:
         return FakeCursor(self)

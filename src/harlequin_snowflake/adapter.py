@@ -261,20 +261,19 @@ class HarlequinSnowflakeConnection(HarlequinConnection):
     def _query(
         self,
         sql: str,
-        params: Sequence[Any] | None = None,
         error_title: str = "Snowflake raised an error while reading the catalog:",
     ) -> list[dict[str, Any]]:
         """One metadata query, as a list of rows keyed by lower-cased column name.
 
         Every catalog read and interaction goes through here, on its own cursor,
-        so that it can run while the editor's own query is still running, and
-        params bind to the statement's `?` markers on the server. Snowflake
-        names the columns of a `SHOW` result in lower case already, but a
-        `select` names them however it was written, so they are folded here.
+        so that it can run while the editor's own query is still running.
+        Snowflake names the columns of a `SHOW` result in lower case already,
+        but a `select` names them however it was written, so they are folded
+        here.
         """
         try:
             with self.conn.cursor(DictCursor) as cur:
-                cur.execute(sql, params)
+                cur.execute(sql)
                 rows = cur.fetchall()
         except SnowflakeError as e:
             raise HarlequinQueryError(msg=f"{e.msg or e}", title=error_title) from e

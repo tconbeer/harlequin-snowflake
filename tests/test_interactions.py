@@ -6,7 +6,7 @@ Snowflake's quoting rules, and checks they name the object it was run on.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Sequence
+from typing import Any, Callable
 
 import pytest
 from fakes import FakeDriver, fake_connection
@@ -43,8 +43,7 @@ class Objects:
     def __init__(
         self,
         name: str,
-        respond: Callable[[str, Sequence[Any] | None], list[dict[str, Any]]]
-        | None = None,
+        respond: Callable[[str], list[dict[str, Any]]] | None = None,
         kind: str = "TABLE",
     ) -> None:
         self.connection, self.server = fake_connection(respond)
@@ -76,8 +75,7 @@ def test_use_names_the_object(name: str, scope: str, depth: int) -> None:
     item = objects.database if scope == "database" else objects.schema
     action = getattr(interactions, f"execute_use_{scope}_statement")
     action(item, objects.driver.as_driver())
-    [(sql, params)] = objects.server.calls
-    assert params is None
+    [sql] = objects.server.calls
     prefix = f"use {scope} "
     assert sql.startswith(prefix)
     assert read_qualified(sql, len(prefix)) == (objects.path(depth), len(sql))
@@ -116,8 +114,7 @@ def test_drop_names_the_object(
         "schema": (objects.schema, 2),
     }.get(object_type, (objects.relation, 3))
     getattr(interactions, action)(item, objects.driver.as_driver())
-    [(sql, params)] = objects.server.calls
-    assert params is None
+    [sql] = objects.server.calls
     prefix = f"drop {object_type} "
     assert sql.startswith(prefix) and sql.endswith(suffix)
     path, end = read_qualified(sql, len(prefix))
@@ -140,11 +137,10 @@ def test_show_ddl_names_the_object(
     name: str, action: str, object_type: str, depth: int
 ) -> None:
     ddl = "create table x (\n    a int\n);"
-    objects = Objects(name, respond=lambda sql, params: [{"get_ddl": ddl}])
+    objects = Objects(name, respond=lambda sql: [{"get_ddl": ddl}])
     item = [objects.database, objects.schema, objects.relation][depth - 1]
     getattr(interactions, action)(item, objects.driver.as_driver())
-    [(sql, params)] = objects.server.calls
-    assert params is None
+    [sql] = objects.server.calls
     object_type_literal, end = read_string(sql, len("select get_ddl("))
     assert object_type_literal == object_type
     assert sql[end : end + 2] == ", "
@@ -165,7 +161,7 @@ def test_show_ddl_header_cannot_break_out_of_its_comment(line_break: str) -> Non
     """A name holding a line break must not put the rest of it on a SQL line."""
     ddl = "create table x (a int);"
     objects = Objects(
-        f"t{line_break}drop table y;", respond=lambda sql, params: [{"get_ddl": ddl}]
+        f"t{line_break}drop table y;", respond=lambda sql: [{"get_ddl": ddl}]
     )
     interactions.show_table_ddl(objects.relation, objects.driver.as_driver())
     [buffer] = objects.driver.buffers
